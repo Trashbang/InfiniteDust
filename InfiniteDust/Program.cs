@@ -442,6 +442,53 @@ namespace InfiniteDust
             Vector invNormal = new Vector(normal.x * -1, normal.y * -1, normal.z * -1);
             return invNormal;
         }
+
+        // It's necessary to work with planes in the form 'ax + by + cz + d = 0' for certain calculations
+        // Getting a, b and c is trivial (they're just the normal components),
+        // but getting d from the three-point form is not. This function returns that component.
+        public double getD()
+        {
+            // If we know a point on the plane, we can substitute it as the x, y, z in the above form
+            Coords p = this.p1;
+            Vector n = this.Normal();
+            return -(n.x * p.x + n.y * p.y + n.z * p.z);
+        }
+
+        // Return the edge that results from two planes intersecting, in the form of a point and a direction.
+        // Note that the planes MAY NOT actually intersect (if they're parallel, for instance).
+        // In this case, it will return the nonsense value (0, 0, 0) (0, 0, 0)
+        public (Vector vec, Coords point) Intersection(Plane p1, Plane p2)
+        {
+            Vector n1 = p1.Normal();
+            Vector n2 = p2.Normal();
+            double d1 = p1.getD();
+            double d2 = p2.getD();
+            Vector cross = Vector.CrossProduct(n1, n2);
+            Vector vec = new Vector(0, 0, 0);
+            Coords point = new Coords(0, 0, 0);
+
+            // If the cross-product is a zero vector, the planes are parallel, and going further is futile
+            if (!cross.Equals(new Vector(0, 0, 0)))
+            {
+                // We have the cross product - a vector that describes the line of intersection of the two planes.
+                // Now we need a point that satisfies both planes, which means solving simultaneous equations.
+                // We can set one component, so let's make z = 0 to get (ax + by - d) = (ax + by - d)
+                // Now we solve with Cramer's Rule.
+                // This normally uses matrices and determinants, but it's kind of a waste when you can't see the fancy notation
+                double cDet = n1.x * n2.y - n1.y * n2.x;
+                double xDet = d1 * n2.y - n1.y * d2;
+                double yDet = d2 * n1.x - n2.x * d1;
+
+                // With any luck, the results are *pretty close* to integer values.
+                // Nevertheless, because of how .maps work, we're gonna have to round the coordinates to nearest
+                vec = new Vector(cross);
+                point.x = (int)(Math.Round(xDet / cDet));
+                point.y = (int)(Math.Round(yDet / cDet));
+                point.z = 0;
+            }
+
+            return (vec, point);
+        }
     }
 
     // Defines what an abstract Location is 'for'.
@@ -948,143 +995,35 @@ namespace InfiniteDust
             // Grow a patch outward from an existing brush in such a way that it doesn't intersect with existing floor patches.
             public Brush BudPatch(Brush parent, ref Coords pos, Vector bearing, int avgSideLength, int sideVariation, Random rng)
             {
-                Plane parentPlane;
+
                 Brush bud = new Brush();
                 int targetHeight = avgSideLength + rng.Next(-sideVariation, sideVariation);
                 int targetWidth = avgSideLength + rng.Next(-sideVariation, sideVariation);
-                bool foundParentPlane = false;
+                // It's easiest to think of this problem in terms of a top-down, two-dimensional format, I think
+                // Sorry if I mix and match language a bit.
 
-                // First step: find a plane to bud from by tracing from the centre of the parent
-                Vector.TraceInfo interiorTrace = new Vector.TraceInfo();
-
-                while (!foundParentPlane)
+                // First step: find a plane to bud from by seeing which normal matches our bearing the closest
+                Plane parentPlane;
+                double smallestAngle = 360;
+                foreach(Plane pl in parent.planes)
                 {
-                    interiorTrace = Vector.InteriorTrace(new Coords(pos.x, pos.y, pos.z - 16), bearing, parent, Vector.MAX_TRACE_LENGTH);
-                    if (interiorTrace.hit)
+                    double diff = Vector.AngleBetween(pl.Normal(), bearing);
+                    if (diff < smallestAngle)
                     {
-                        // We need to verify that the interior trace hasn't reached the join between two existing brushes,
-                        // And if it has, we need to go through *that* brush as well
-                    }
-                    else
-                    {
-                        // Honestly this shouldn't happen unless A) your brush is super invalid or B) you've set a stupidly short trace length
+                        smallestAngle = diff;
+                        parentPlane = pl;
                     }
                 }
+                // Define the leftmost and rightmost edges on that plane
+                // Since we're only concerned with the top-down representation, we can ignore Z
+                // and simplify this to the point where two lines intersect
                 
-                parentPlane = interiorTrace.impactPlane;
-                    
-                //bud.planes.Add(new Plane(parentPlane.p3, parentPlane.p2, parentPlane.p1, "NULL", true)); // First brush plane: the inverse of the plane we just hit, to ensure it butts up against it
+                // Try to find a point that's not covered (wait, what do we do if there isn't one?)
 
-                Vector.TraceInfo seekTrace = Vector.Trace(interiorTrace.finishPoint, parentPlane.Normal(), floorBrushwork, targetHeight); // Trace out perpendicular to the parent plane until we hit the targetHeight or another brush
-                Vector seekVector = new Vector(seekTrace.startPoint, seekTrace.finishPoint); // This really ought to just be a member, right?
-                int actualHeight = (int)seekTrace.traceLen;
+                // Grow a line perpendicular to parent plane at the valid point
 
-                /*
-                // Second plane: The same, except displaced out to the end of the trace
-                    
-                Coords cap1 = new Coords((int)(parentPlane.p1.x + seekVector.x), (int)(parentPlane.p1.y + seekVector.y), (int)(parentPlane.p1.z + seekVector.z));
-                Coords cap2 = new Coords((int)(parentPlane.p2.x + seekVector.x), (int)(parentPlane.p2.y + seekVector.y), (int)(parentPlane.p2.z + seekVector.z));
-                Coords cap3 = new Coords((int)(parentPlane.p3.x + seekVector.x), (int)(parentPlane.p3.y + seekVector.y), (int)(parentPlane.p3.z + seekVector.z));
-                bud.planes.Add(new Plane(cap1, cap2, cap3, "NULL", true));
-                */
-                // Update our 'current position' (ref value) for the caller
-                pos = new Coords(interiorTrace.finishPoint.x + (int)(seekVector.x / 2), interiorTrace.finishPoint.y + (int)(seekVector.y / 2), pos.z);
+                // Grow a rectangle with the line's height
 
-                // Okay, now we progressively spread out and make more traces perpendicular to the plane to determine how wide we can make the brush
-                int leftLen = 0;
-                int rightLen = 0;
-                bool leftHit = false;
-                bool rightHit = false;
-                Vector left = Vector.RotateAboutAxis(parentPlane.Normal(), new Vector(0, 0, 1), 3 * Math.PI / 2);
-                Vector right = Vector.RotateAboutAxis(parentPlane.Normal(), new Vector(0, 0, 1), Math.PI / 2);
-                Vector.TraceInfo successfulLeftUp = new Vector.TraceInfo(new Coords(0, 0, 0));
-                Vector.TraceInfo successfulRightUp = new Vector.TraceInfo(new Coords(0, 0, 0));
-                do
-                {
-                    if (!leftHit)
-                    {
-                        Vector.TraceInfo leftTrace = Vector.Trace(interiorTrace.finishPoint, left, floorBrushwork, leftLen);
-                        if (!leftTrace.hit)
-                        {
-                            Vector.TraceInfo leftUpTrace = Vector.Trace(leftTrace.finishPoint, parentPlane.Normal(), floorBrushwork, actualHeight);
-                            if (leftUpTrace.traceLen == actualHeight)
-                            {
-                                successfulLeftUp = leftUpTrace;
-                                leftLen++; // We've safely panned across, and can increase the width on this side
-                            }
-                            else // We hit something prematurely
-                            {
-                                leftHit = true;
-                            }
-                        }
-                        else
-                        {
-                            leftHit = true;
-                        }
-                    }
-                    if (!rightHit)
-                    {
-                        Vector.TraceInfo rightTrace = Vector.Trace(interiorTrace.finishPoint, right, floorBrushwork, rightLen);
-                        if (!rightTrace.hit)
-                        {
-                            Vector.TraceInfo rightUpTrace = Vector.Trace(rightTrace.finishPoint, parentPlane.Normal(), floorBrushwork, actualHeight);
-                            if (rightUpTrace.traceLen == actualHeight)
-                            {
-                                successfulRightUp = rightUpTrace;
-                                rightLen++; // We've safely panned across, and can increase the width on this side
-                            }
-                            else // We hit something prematurely
-                            {
-                                rightHit = true;
-                            }
-                        }
-                        else
-                        {
-                            rightHit = true;
-                        }
-                    }
-                } while ((leftLen + rightLen <= targetWidth) && (!rightHit || !leftHit)); // Continue growing sideways while our total width is less than the target and AT LEAST ONE side still is able to grow
-
-                /*
-                Coords leftp2 = successfulLeftUp.startPoint;
-                Coords leftp1 = successfulLeftUp.finishPoint;
-                Coords leftp3 = new Coords(successfulLeftUp.startPoint.x, successfulLeftUp.startPoint.y, successfulLeftUp.startPoint.z - 32);
-                bud.planes.Add(new Plane(leftp1, leftp2, leftp3, "NULL", true));
-
-                Coords rightp2 = successfulRightUp.startPoint;
-                Coords rightp3 = successfulRightUp.finishPoint;
-                Coords rightp1 = new Coords(successfulRightUp.startPoint.x, successfulRightUp.startPoint.y, successfulRightUp.startPoint.z - 32);
-                bud.planes.Add(new Plane(rightp1, rightp2, rightp3, "NULL", true));
-                */
-
-                // Now that we have the positions, figure out the bounds and the top-left/bottom-right
-                // (The plane could be oriented in any direction, so this is a necessity)
-                int xMin = 99999, yMin = 99999, xMax = -99999, yMax = -99999;
-                Coords[] corners = { successfulLeftUp.startPoint, successfulLeftUp.finishPoint, successfulRightUp.finishPoint, successfulRightUp.startPoint };
-                foreach (Coords corner in corners)
-                {
-                    if (corner.x < xMin)
-                    {
-                        xMin = corner.x;
-                    }
-                    if (corner.x > xMax)
-                    {
-                        xMax = corner.x;
-                    }
-                    if (corner.y < yMin)
-                    {
-                        yMin = corner.y;
-                    }
-                    if (corner.y > yMax)
-                    {
-                        yMax = corner.y;
-                    }
-                }
-
-                Coords topLeft = new Coords(xMin, yMax, pos.z);
-                Coords bottomRight = new Coords(xMax, yMin, pos.z - 32);
-
-                bud = new Brush(Brush.InitialShape.BLOCK, "NULL", topLeft, bottomRight);
 
 
 
@@ -1118,8 +1057,8 @@ namespace InfiniteDust
                         source = ends[1];
                         dest = ends[0];
                     }
-                    MakePath(source, dest, PATH_WIGGLYNESS, AVG_PATCH_SIDE, PATCH_SIDE_VARIATION, rng, false);
-                    Console.WriteLine("Generated path between " + path.GetLocations()[0].coords.ToMapString() + " and " + path.GetLocations()[1].coords.ToMapString());
+                    //MakePath(source, dest, PATH_WIGGLYNESS, AVG_PATCH_SIDE, PATCH_SIDE_VARIATION, rng, false);
+                    //Console.WriteLine("Generated path between " + path.GetLocations()[0].coords.ToMapString() + " and " + path.GetLocations()[1].coords.ToMapString());
 
                 }
 
@@ -1167,10 +1106,7 @@ namespace InfiniteDust
                     currentBrush = BudPatch(currentBrush, ref currentPos, nextBearing, AVG_PATCH_SIDE, PATCH_SIDE_VARIATION, rng);
                     floorBrushwork.Add(currentBrush);
 
-                    // Alright, so for SOME REASON
-                    // none of the brushes we create via budding are ever sharing a side with the destination brush.
-                    // I've verified that rectShareSide works as intended, but...
-                    // Maybe it's an off-by-one issue?
+
                     
                     // How do we know if we reached the destination? Either our currentBrush covers it, OR, it shares a side with a brush that already does
                     Vector.TraceInfo destTrace = Vector.Trace(new Coords(dest.coords.x, dest.coords.y, dest.coords.z - 16), new Vector(0, 0, 1), floorBrushwork, Vector.MAX_TRACE_LENGTH);
