@@ -899,50 +899,6 @@ namespace InfiniteDust
 
             }
 
-            // Test if two rectangular brushes share a side
-            // It'd be nice if this could be generalised but it might make my brain implode
-            public static Boolean rectShareSide(Brush b1, Brush b2)
-            {
-                // Two brushes are touching IF:
-                // - There is a plane (pl1) in b1 that is the inverse of a plane (pl2) in b2, AND
-                // - pl1 is touching pl2 (i.e. the dot product of pl2's normal and a vector BETWEEN pl1.p1 and pl2.p1 is 0), AND
-                // - No pair of planes exists such that:
-                // - - the planes have opposite normals AND
-                // - - the planes are on the positive sides of each other
-                bool areTouching = false;
-                bool inversePair = false;
-                bool positivePair = false;
-                foreach (Plane pl1 in b1.planes)
-                {
-                    foreach (Plane pl2 in b2.planes)
-                    {
-                        Vector norm = pl1.Normal();
-                        Vector invNorm = pl2.InverseNormal();
-                        if (norm.Equals(invNorm))
-                        {
-                            // Right, these planes have opposite normals. So either they're the pair that confirms the first part of the condition
-                            // or they're the pair that will eliminate the second part of the condition.
-                            // Once more, we use the dot product to test
-                            Vector betweenVec = new Vector(pl1.p1.x - pl2.p1.x, pl1.p1.y - pl2.p1.y, pl1.p1.z - pl2.p1.z); // Points chosen arbitrarily; the important thing is that it goes from p2 to p1
-                            double dotProduct = Vector.DotProduct(betweenVec, pl2.Normal());
-                            if (dotProduct == 0)
-                            {
-                                inversePair = true;
-                            }
-                            if (dotProduct > 0)
-                            {
-                                positivePair = true; // oh no, they can't be touching if this is true
-                            }
-                        }
-                    }
-                }
-                if (inversePair && !positivePair)
-                {
-                    areTouching = true;
-                }
-                return areTouching;
-            }
-
             // Test if two rectangular prism brushes share a side. If they do, returns the corresponding planes along which they touch.
             // Returns (null, null) otherwise.
             // This function is a simplified version of the problem because it turns out generalising it to work for any kind of convex shape
@@ -1043,9 +999,7 @@ namespace InfiniteDust
             // Grow a patch outward from an existing brush in such a way that it doesn't intersect with existing floor patches.
             public Brush BudPatch(Brush parent, ref Coords pos, Vector bearing, int avgSideLength, int sideVariation, Random rng)
             {
-
                 Brush bud = null;
-                
                 int targetHeight = avgSideLength + rng.Next(-sideVariation, sideVariation);
                 int targetWidth = avgSideLength + rng.Next(-sideVariation, sideVariation);
                 // It's easiest to think of this problem in terms of a top-down, two-dimensional format, I think
@@ -1067,8 +1021,28 @@ namespace InfiniteDust
                     }
                     // Now check: is there a brush already touching this side?
                     // If so, we move to that brush and try again.
-
+                    bool foundAdjacency = false;
+                    foreach (Brush touchingBrush in this.floorBrushwork)
+                    {
+                        if (touchingBrush != parent)
+                        {
+                            (Plane pl1, Plane pl2) = Brush.testRectAdjacency(parent, touchingBrush);
+                            if (pl1 == parentPlane)
+                            {
+                                parent = touchingBrush;
+                                foundAdjacency = true;
+                                break;
+                            }
+                        }
+                    }
+                    // If no adjacency was found on the selected surface, we can start to grow our new brush.
+                    // Otherwise, the process repeats with a new 'parent'
+                    if (!foundAdjacency)
+                    {
+                        readyToBud = true;
+                    }
                 }
+                // Select a point on the valid surface to bud from
 
                 // Grow a line perpendicular to parent plane at the valid point
 
