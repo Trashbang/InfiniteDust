@@ -457,7 +457,7 @@ namespace InfiniteDust
         // Return the edge that results from two planes intersecting, in the form of a point and a direction.
         // Note that the planes MAY NOT actually intersect (if they're parallel, for instance).
         // In this case, it will return the nonsense value (0, 0, 0) (0, 0, 0)
-        public (Vector vec, Coords point) Intersection(Plane p1, Plane p2)
+        public static (Vector vec, Coords point) Intersection(Plane p1, Plane p2)
         {
             Vector n1 = p1.Normal();
             Vector n2 = p2.Normal();
@@ -685,7 +685,7 @@ namespace InfiniteDust
     {
         public static void log(string message)
         {
-
+            // hey uh, remember to implement this at some point, yeah?
         }
     }
 
@@ -943,6 +943,54 @@ namespace InfiniteDust
                 return areTouching;
             }
 
+            // Test if two rectangular prism brushes share a side. If they do, returns the corresponding planes along which they touch.
+            // Returns (null, null) otherwise.
+            // This function is a simplified version of the problem because it turns out generalising it to work for any kind of convex shape
+            // is a GODDAMN NIGHTMARE OH MY GOD
+            public static (Plane, Plane) testRectAdjacency(Brush b1, Brush b2)
+            {
+                // Two conditions must be satisfied in order for brushes to be touching:
+                // We must be able to find a pair of planes with opposite normals and zero distance between them
+                // (i.e. touching planes)
+                // AND
+                // We must *NOT* be able to find a pair of planes with opposite normals and *positive* distance between them
+                // (i.e. the planes are parallel and on the outside of each other)
+                Plane side1 = null;
+                Plane side2 = null;
+                bool gap = false;
+                foreach (Plane pl1 in b1.planes)
+                {
+                    foreach (Plane pl2 in b2.planes)
+                    {
+                        if (pl1.Normal().Equals(pl2.InverseNormal()))
+                        {
+                            // 'diff' is a line between arbitrary points on each plane.
+                            // Thus, if the planes are touching, that line will be perpendicular to their normals
+                            // (There shouldn't be more than one touching pair, unless somebody's been fucking around with vertices)
+                            // And if the planes have a positive distance between them, the line will form an acute angle with their normals
+                            Vector diff = new Vector(pl1.p1.x - pl2.p1.x, pl1.p1.y - pl2.p1.y, pl1.p1.z - pl2.p1.z);
+                            if (Vector.DotProduct(diff, pl2.Normal()) == 0)
+                            {
+                                side1 = pl1;
+                                side2 = pl2;
+                            }
+                            if (Vector.DotProduct(diff, pl2.Normal()) > 0)
+                            {
+                                gap = true;
+                                side1 = null;
+                                side2 = null;
+                                break;
+                            }
+                        }
+                    }
+                    if (gap)
+                    {
+                        break;
+                    }
+                }
+                return (side1, side2);
+            }
+
             public string ToMapString() // As opposed to ToString, this supplies a properly formatted representation of the brush that can be written to the .map file (within the context of the BrushEntity, of course)
             {
                 string asString = "\t{\r\n";
@@ -996,29 +1044,31 @@ namespace InfiniteDust
             public Brush BudPatch(Brush parent, ref Coords pos, Vector bearing, int avgSideLength, int sideVariation, Random rng)
             {
 
-                Brush bud = new Brush();
+                Brush bud = null;
+                
                 int targetHeight = avgSideLength + rng.Next(-sideVariation, sideVariation);
                 int targetWidth = avgSideLength + rng.Next(-sideVariation, sideVariation);
                 // It's easiest to think of this problem in terms of a top-down, two-dimensional format, I think
                 // Sorry if I mix and match language a bit.
-
-                // First step: find a plane to bud from by seeing which normal matches our bearing the closest
-                Plane parentPlane;
-                double smallestAngle = 360;
-                foreach(Plane pl in parent.planes)
+                bool readyToBud = false;
+                Plane parentPlane = null;
+                while (!readyToBud)
                 {
-                    double diff = Vector.AngleBetween(pl.Normal(), bearing);
-                    if (diff < smallestAngle)
+                    // First step: find a plane to bud from by seeing which normal matches our bearing the closest
+                    double smallestAngle = 360;
+                    foreach (Plane pl in parent.planes)
                     {
-                        smallestAngle = diff;
-                        parentPlane = pl;
+                        double diff = Vector.AngleBetween(pl.Normal(), bearing);
+                        if (diff < smallestAngle)
+                        {
+                            smallestAngle = diff;
+                            parentPlane = pl;
+                        }
                     }
+                    // Now check: is there a brush already touching this side?
+                    // If so, we move to that brush and try again.
+
                 }
-                // Define the leftmost and rightmost edges on that plane
-                // Since we're only concerned with the top-down representation, we can ignore Z
-                // and simplify this to the point where two lines intersect
-                
-                // Try to find a point that's not covered (wait, what do we do if there isn't one?)
 
                 // Grow a line perpendicular to parent plane at the valid point
 
