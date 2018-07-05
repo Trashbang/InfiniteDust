@@ -107,6 +107,10 @@ namespace InfiniteDust
             this.z = b.z - a.z;
         }
 
+        public static Vector Up()
+        {
+            return new Vector(0, 0, 1);
+        }
 
         // Cross product of two other vectors
         public static Vector CrossProduct(Vector a, Vector b)
@@ -153,6 +157,11 @@ namespace InfiniteDust
         public static Vector operator -(Vector a, Vector b)
         {
             return new Vector(a.x - b.x, a.y - b.y, a.z - b.z);
+        }
+        
+        public static Vector operator *(Vector a, int b)
+        {
+            return new Vector(a.x * b, a.y * b, a.z * b);
         }
 
         public static bool Equals(Vector a, Vector b)
@@ -1042,13 +1051,46 @@ namespace InfiniteDust
                         readyToBud = true;
                     }
                 }
-                // Select a point on the valid surface to bud from
+                // Select a point on the valid surface to bud from.
+                // Height is immaterial, so this can be thought of a point somewhere on a continuum between the two corners.
+                // (which we need to get first, obviously)
+                Vector dummy;
+                Coords startCorner = new Coords();
+                Coords endCorner = new Coords();
+                foreach (Plane pl in parent.planes)
+                {
+                    if (pl.Normal().z == 0 && pl.Normal().Equals(Vector.RotateAboutAxis(parentPlane.Normal(), Vector.Up(), Math.PI / 2)))
+                    {
+                        (dummy, startCorner) = Plane.Intersection(pl, parentPlane);
+                        startCorner.z = pos.z;
+                    }
+                    if (pl.Normal().z == 0 && pl.Normal().Equals(Vector.RotateAboutAxis(parentPlane.Normal(), Vector.Up(), 3 * Math.PI / 2)))
+                    {
+                        (dummy, endCorner) = Plane.Intersection(pl, parentPlane);
+                        endCorner.z = pos.z;
+                    }
+                }
+                Vector line = new Vector(startCorner, endCorner);
+                double scale = rng.NextDouble();
+                Coords seedPoint = new Coords(startCorner.x + (int)Math.Round(line.x * scale), startCorner.y + (int)Math.Round(line.y * scale), startCorner.z + (int)Math.Round(line.z * scale));
 
-                // Grow a line perpendicular to parent plane at the valid point
+                // Grow a line perpendicular to parent plane at the valid point, to determine 'height' of the rect
+                Vector.TraceInfo initialTrace = Vector.Trace(seedPoint, parentPlane.Normal(), this.floorBrushwork, targetHeight);
 
-                // Grow a rectangle with the line's height
-
-
+                // Choose a direction and grow a rectangle with the line's height
+                int sign = (rng.Next(0, 2) * 2) - 1;
+                Vector direction = Vector.RotateAboutAxis(parentPlane.Normal(), Vector.Up(), Math.PI / 2) * sign;
+                int maxWidth = targetWidth;
+                for (int i = 0; i < initialTrace.traceLen; i++)
+                {
+                    Coords widthTraceStart = new Coords((int)Math.Round(seedPoint.x + parentPlane.Normal().x * i), (int)Math.Round(seedPoint.y + parentPlane.Normal().y * i), (int)Math.Round(seedPoint.z + parentPlane.Normal().z * i));
+                    Vector.TraceInfo widthTrace = Vector.Trace(widthTraceStart, direction, this.floorBrushwork, maxWidth);
+                    if (widthTrace.traceLen < maxWidth)
+                    {
+                        maxWidth = (int)Math.Round(widthTrace.traceLen);
+                    }
+                }
+                // Right, we have enough info to actually construct the brush
 
 
                 return bud;
