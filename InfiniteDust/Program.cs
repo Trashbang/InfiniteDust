@@ -64,6 +64,11 @@ namespace InfiniteDust
             this.z = z;
         }
 
+        public static Coords operator +(Coords a, Vector b)
+        {
+            return new Coords((int)Math.Round(a.x + b.x), (int)Math.Round(a.y + b.y), (int)Math.Round(a.z + b.z));
+        }
+
         public string ToMapString() // As opposed to ToString, this supplies a properly formatted representation for writing to .map
         {
             return "( " + x + " " + y + " " + z + " )"; // I don't know how particular the tools are about the spacing here, but I don't intend to find out
@@ -912,7 +917,7 @@ namespace InfiniteDust
             // Returns (null, null) otherwise.
             // This function is a simplified version of the problem because it turns out generalising it to work for any kind of convex shape
             // is a GODDAMN NIGHTMARE OH MY GOD
-            public static (Plane, Plane) testRectAdjacency(Brush b1, Brush b2)
+            public static (Plane, Plane) TestRectAdjacency(Brush b1, Brush b2)
             {
                 // Two conditions must be satisfied in order for brushes to be touching:
                 // We must be able to find a pair of planes with opposite normals and zero distance between them
@@ -1006,11 +1011,22 @@ namespace InfiniteDust
             }
 
             // Grow a patch outward from an existing brush in such a way that it doesn't intersect with existing floor patches.
-            public Brush BudPatch(Brush parent, ref Coords pos, Vector bearing, int avgSideLength, int sideVariation, Random rng)
+            // Returns the brush itself and also a point indicating the middle of the brush
+            public (Brush, Coords) BudPatch(Brush parent, Vector bearing, int avgSideLength, int sideVariation, Random rng)
             {
                 Brush bud = null;
                 int targetHeight = avgSideLength + rng.Next(-sideVariation, sideVariation);
                 int targetWidth = avgSideLength + rng.Next(-sideVariation, sideVariation);
+                int floorHeight = -9999;
+                // There's got to be a quicker way to pull the right plane out of the set, right???
+                foreach(Plane plane in parent.planes)
+                {
+                    if (plane.Normal().z > 0)
+                    {
+                        floorHeight = plane.p1.z;
+                        break;
+                    }
+                }
                 // It's easiest to think of this problem in terms of a top-down, two-dimensional format, I think
                 // Sorry if I mix and match language a bit.
                 bool readyToBud = false;
@@ -1035,7 +1051,7 @@ namespace InfiniteDust
                     {
                         if (touchingBrush != parent)
                         {
-                            (Plane pl1, Plane pl2) = Brush.testRectAdjacency(parent, touchingBrush);
+                            (Plane pl1, Plane pl2) = Brush.TestRectAdjacency(parent, touchingBrush);
                             if (pl1 == parentPlane)
                             {
                                 parent = touchingBrush;
@@ -1062,12 +1078,12 @@ namespace InfiniteDust
                     if (pl.Normal().z == 0 && pl.Normal().Equals(Vector.RotateAboutAxis(parentPlane.Normal(), Vector.Up(), Math.PI / 2)))
                     {
                         (dummy, startCorner) = Plane.Intersection(pl, parentPlane);
-                        startCorner.z = pos.z;
+                        startCorner.z = floorHeight;
                     }
                     if (pl.Normal().z == 0 && pl.Normal().Equals(Vector.RotateAboutAxis(parentPlane.Normal(), Vector.Up(), 3 * Math.PI / 2)))
                     {
                         (dummy, endCorner) = Plane.Intersection(pl, parentPlane);
-                        endCorner.z = pos.z;
+                        endCorner.z = floorHeight;
                     }
                 }
                 Vector line = new Vector(startCorner, endCorner);
@@ -1091,9 +1107,43 @@ namespace InfiniteDust
                     }
                 }
                 // Right, we have enough info to actually construct the brush
+                // Now we just need to sort it out
+                // (There's probably a more efficient way to do this, but w/e, it's four points, gimme a break)
+                Coords[] corners = new Coords[4];
+                corners[0] = seedPoint;
+                corners[1] = initialTrace.finishPoint;
+                corners[2] = seedPoint + direction * maxWidth;
+                corners[3] = initialTrace.finishPoint + direction * maxWidth;
+                int maxX = -9999;
+                int maxY = -9999;
+                int minX = 9999;
+                int minY = 9999;
+                foreach (Coords corner in corners)
+                {
+                    if (corner.x < minX)
+                    {
+                        minX = corner.x;
+                    }
+                    if (corner.x > maxX)
+                    {
+                        maxX = corner.x;
+                    }
+                    if (corner.y < minY)
+                    {
+                        minY = corner.y;
+                    }
+                    if (corner.y > maxY)
+                    {
+                        maxY = corner.y;
+                    }
+                }
 
-
-                return bud;
+                Coords topLeft = new Coords(minX, maxY, floorHeight);
+                Coords bottomRight = new Coords(maxX, minY, floorHeight - 32);
+                bud = new Brush(Brush.InitialShape.BLOCK, "null", topLeft, bottomRight);
+                Coords budCentre = new Coords(minX + ((maxX - minX) / 2), minY + ((maxY - minY) / 2), floorHeight);
+                Console.WriteLine("Generated brush between " + topLeft.ToMapString() + " and " + bottomRight.ToMapString());
+                return (bud, budCentre);
             }
 
             public void MakeFloor()
@@ -1123,8 +1173,8 @@ namespace InfiniteDust
                         source = ends[1];
                         dest = ends[0];
                     }
-                    //MakePath(source, dest, PATH_WIGGLYNESS, AVG_PATCH_SIDE, PATCH_SIDE_VARIATION, rng, false);
-                    //Console.WriteLine("Generated path between " + path.GetLocations()[0].coords.ToMapString() + " and " + path.GetLocations()[1].coords.ToMapString());
+                    MakePath(source, dest, PATH_WIGGLYNESS, AVG_PATCH_SIDE, PATCH_SIDE_VARIATION, rng, false);
+                    Console.WriteLine("Generated path between " + path.GetLocations()[0].coords.ToMapString() + " and " + path.GetLocations()[1].coords.ToMapString());
 
                 }
 
@@ -1137,7 +1187,6 @@ namespace InfiniteDust
                 Brush currentBrush;
                 Vector nextBearing; 
                 bool destReached = false;
-
                 // Is a brush already at the start? If not, make one and make it the currentBrush
                 Vector.TraceInfo sourceTrace = Vector.Trace(new Coords(source.coords.x, source.coords.y, source.coords.z - 16), new Vector(0, 0, 1), floorBrushwork, Vector.MAX_TRACE_LENGTH);
                 if (sourceTrace.hit)
@@ -1168,17 +1217,22 @@ namespace InfiniteDust
                         z *= wiggliness * 120;
                     }
                     nextBearing = Vector.RotateAboutAxis(nextBearing, new Vector(0, 0, 1), z * Math.PI / 180);
-
-                    currentBrush = BudPatch(currentBrush, ref currentPos, nextBearing, AVG_PATCH_SIDE, PATCH_SIDE_VARIATION, rng);
+                    // Bud out and update our 'position' (roughly) to the new brush
+                    (currentBrush, currentPos) = BudPatch(currentBrush, nextBearing, AVG_PATCH_SIDE, PATCH_SIDE_VARIATION, rng);
                     floorBrushwork.Add(currentBrush);
-
-
-                    
                     // How do we know if we reached the destination? Either our currentBrush covers it, OR, it shares a side with a brush that already does
                     Vector.TraceInfo destTrace = Vector.Trace(new Coords(dest.coords.x, dest.coords.y, dest.coords.z - 16), new Vector(0, 0, 1), floorBrushwork, Vector.MAX_TRACE_LENGTH);
-                    if (destTrace.hit && ((destTrace.impactBrush == currentBrush) || (Brush.rectShareSide(currentBrush, destTrace.impactBrush))))
+                    if (destTrace.hit && (destTrace.impactBrush == currentBrush))
                     {
                         destReached = true;
+                    }
+                    else 
+                    {
+                        (Plane p1, Plane p2) = Brush.TestRectAdjacency(currentBrush, destTrace.impactBrush);
+                        if (destTrace.hit && p1 != null && p2 != null)
+                        {
+                            destReached = true;
+                        }
                     }
                 }
             }
