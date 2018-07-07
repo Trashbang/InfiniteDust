@@ -179,14 +179,24 @@ namespace InfiniteDust
             return isEqual;
         }
 
-        public bool Equals(Vector a)
+        public static bool BasicallyEquals(Vector a, Vector b, double margin)
         {
             bool isEqual = false;
-            if ((a.x == this.x) && (a.y == this.y) && (a.z == this.z))
+            if ((Math.Abs(a.x - b.x) < margin) && (Math.Abs(a.y - b.y) < margin) && (Math.Abs(a.z - b.z) < margin))
             {
                 isEqual = true;
             }
             return isEqual;
+        }
+
+        public bool Equals(Vector a)
+        {
+            return Equals(this, a);
+        }
+
+        public bool BasicallyEquals(Vector a, double margin)
+        {
+            return BasicallyEquals(this, a, margin);
         }
 
         // Uses degrees
@@ -486,12 +496,12 @@ namespace InfiniteDust
             {
                 // We have the cross product - a vector that describes the line of intersection of the two planes.
                 // Now we need a point that satisfies both planes, which means solving simultaneous equations.
-                // We can set one component, so let's make z = 0 to get (ax + by - d) = (ax + by - d)
+                // We can set one component, so let's make z = 0
                 // Now we solve with Cramer's Rule.
                 // This normally uses matrices and determinants, but it's kind of a waste when you can't see the fancy notation
                 double cDet = n1.x * n2.y - n1.y * n2.x;
-                double xDet = d1 * n2.y - n1.y * d2;
-                double yDet = d2 * n1.x - n2.x * d1;
+                double xDet = -d1 * n2.y - n1.y * -d2;
+                double yDet = -d2 * n1.x - n2.x * -d1;
 
                 // With any luck, the results are *pretty close* to integer values.
                 // Nevertheless, because of how .maps work, we're gonna have to round the coordinates to nearest
@@ -1075,12 +1085,12 @@ namespace InfiniteDust
                 Coords endCorner = new Coords();
                 foreach (Plane pl in parent.planes)
                 {
-                    if (pl.Normal().z == 0 && pl.Normal().Equals(Vector.RotateAboutAxis(parentPlane.Normal(), Vector.Up(), Math.PI / 2)))
+                    if (pl.Normal().z == 0 && pl.Normal().BasicallyEquals(Vector.RotateAboutAxis(parentPlane.Normal(), Vector.Up(), Math.PI / 2), 0.2))
                     {
                         (dummy, startCorner) = Plane.Intersection(pl, parentPlane);
                         startCorner.z = floorHeight;
                     }
-                    if (pl.Normal().z == 0 && pl.Normal().Equals(Vector.RotateAboutAxis(parentPlane.Normal(), Vector.Up(), 3 * Math.PI / 2)))
+                    if (pl.Normal().z == 0 && pl.Normal().BasicallyEquals(Vector.RotateAboutAxis(parentPlane.Normal(), Vector.Up(), 3 * Math.PI / 2), 0.2))
                     {
                         (dummy, endCorner) = Plane.Intersection(pl, parentPlane);
                         endCorner.z = floorHeight;
@@ -1088,7 +1098,7 @@ namespace InfiniteDust
                 }
                 Vector line = new Vector(startCorner, endCorner);
                 double scale = rng.NextDouble();
-                Coords seedPoint = new Coords(startCorner.x + (int)Math.Round(line.x * scale), startCorner.y + (int)Math.Round(line.y * scale), startCorner.z + (int)Math.Round(line.z * scale));
+                Coords seedPoint = new Coords(startCorner.x + (int)Math.Round(line.x * scale), startCorner.y + (int)Math.Round(line.y * scale), startCorner.z - 16);
 
                 // Grow a line perpendicular to parent plane at the valid point, to determine 'height' of the rect
                 Vector.TraceInfo initialTrace = Vector.Trace(seedPoint, parentPlane.Normal(), this.floorBrushwork, targetHeight);
@@ -1218,20 +1228,25 @@ namespace InfiniteDust
                     }
                     nextBearing = Vector.RotateAboutAxis(nextBearing, new Vector(0, 0, 1), z * Math.PI / 180);
                     // Bud out and update our 'position' (roughly) to the new brush
-                    (currentBrush, currentPos) = BudPatch(currentBrush, nextBearing, AVG_PATCH_SIDE, PATCH_SIDE_VARIATION, rng);
-                    floorBrushwork.Add(currentBrush);
+                    Brush nextBrush;
+                    (nextBrush, currentPos) = BudPatch(currentBrush, nextBearing, AVG_PATCH_SIDE, PATCH_SIDE_VARIATION, rng);
+                    floorBrushwork.Add(nextBrush);
+                    currentBrush = nextBrush;
                     // How do we know if we reached the destination? Either our currentBrush covers it, OR, it shares a side with a brush that already does
                     Vector.TraceInfo destTrace = Vector.Trace(new Coords(dest.coords.x, dest.coords.y, dest.coords.z - 16), new Vector(0, 0, 1), floorBrushwork, Vector.MAX_TRACE_LENGTH);
-                    if (destTrace.hit && (destTrace.impactBrush == currentBrush))
+                    if (destTrace.hit)
                     {
-                        destReached = true;
-                    }
-                    else 
-                    {
-                        (Plane p1, Plane p2) = Brush.TestRectAdjacency(currentBrush, destTrace.impactBrush);
-                        if (destTrace.hit && p1 != null && p2 != null)
+                        if (destTrace.impactBrush == currentBrush)
                         {
                             destReached = true;
+                        }
+                        else
+                        {
+                            (Plane p1, Plane p2) = Brush.TestRectAdjacency(currentBrush, destTrace.impactBrush);
+                            if (destTrace.hit && p1 != null && p2 != null)
+                            {
+                                destReached = true;
+                            }
                         }
                     }
                 }
