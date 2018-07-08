@@ -169,6 +169,11 @@ namespace InfiniteDust
             return new Vector(a.x * b, a.y * b, a.z * b);
         }
 
+        public static Vector operator *(Vector a, double b)
+        {
+            return new Vector(a.x * b, a.y * b, a.z * b);
+        }
+
         public static bool Equals(Vector a, Vector b)
         {
             bool isEqual = false;
@@ -569,6 +574,7 @@ namespace InfiniteDust
         public const int BASE_HORIZONTAL_SEPARATION = 2048; // Standard (average?) distance between any two locations. Derived from Dust2 being approx 4096x4096
         public const int MAX_HORIZONTAL_VARIANCE = 512; // Max distance a location can deviate from the average
         public const int MIN_HORIZONTAL_VARIANCE = 0; // Probably will never need this but what the hell
+        public const int GRID_SNAP_SIZE = 32; // Snap locations to grid. Note that this const is NOT SHARED with the brushwork generator
 
         public Location[,] locales;
         public List<Path> paths;
@@ -670,7 +676,7 @@ namespace InfiniteDust
         // Creates coordinate sets for each Location so they have spatial placement and distance.
         // This might be better off as part of the constructor, but I'm keeping them separate for now
         // (in case this becomes debugging hell)
-        public void GenerateSpatialCoords(int minVvariance, int maxVvariance, int avgHseparation, int maxHvariance, int minHvariance)
+        public void GenerateSpatialCoords(int minVvariance, int maxVvariance, int avgHseparation, int maxHvariance, int minHvariance, int snap)
         {
             Random rng = new Random();
             locales[1, 1].coords = new Coords(0, 0, 0); // I'm pretty sure I don't even need this line but I'm leaving it in, in case I change the generation code
@@ -681,15 +687,15 @@ namespace InfiniteDust
                 for (int j = 0; j <= 2; j++)
                 {
                     // reducing our indices by 1 here because the 'centre' is at index [1, 1] and we want the multiplication to be easy
-                    int hOffset = rng.Next(minHvariance, maxHvariance);
+                    int hOffset = (rng.Next(minHvariance, maxHvariance) / snap) * snap;
                     if (rng.NextDouble() > 0.5) { hOffset *= -1; }
                     locales[i, j].coords.x = (i - 1) * avgHseparation + hOffset;
 
-                    hOffset = rng.Next(minHvariance, maxHvariance);
+                    hOffset = (rng.Next(minHvariance, maxHvariance) / snap) * snap;
                     if (rng.NextDouble() > 0.5) { hOffset *= -1; }
                     locales[i, j].coords.y = (j - 1) * -avgHseparation + hOffset;
 
-                    int vOffset = rng.Next(minVvariance, maxVvariance);
+                    int vOffset = (rng.Next(minVvariance, maxVvariance) / snap) * snap;
                     if (rng.NextDouble() > 0.5) { vOffset *= -1; }
                     locales[i, j].coords.z = vOffset;
                 }
@@ -700,7 +706,7 @@ namespace InfiniteDust
         // Default override that uses the built-in const values (use this, preferably)
         public void GenerateSpatialCoords()
         {
-            this.GenerateSpatialCoords(MIN_VERTICAL_VARIANCE, MAX_VERTICAL_VARIANCE, BASE_HORIZONTAL_SEPARATION, MAX_HORIZONTAL_VARIANCE, MIN_HORIZONTAL_VARIANCE);
+            this.GenerateSpatialCoords(MIN_VERTICAL_VARIANCE, MAX_VERTICAL_VARIANCE, BASE_HORIZONTAL_SEPARATION, MAX_HORIZONTAL_VARIANCE, MIN_HORIZONTAL_VARIANCE, GRID_SNAP_SIZE);
         }
     }
 
@@ -985,9 +991,10 @@ namespace InfiniteDust
 
         public class BrushworkGenerator
         {
-            public const double PATH_WIGGLYNESS = 0.5; // Degree to which paths created by the floor generator deviate from as-the-crow-flies (I guess?)
+            public const double PATH_WIGGLYNESS = 0.0; // Degree to which paths created by the floor generator deviate from as-the-crow-flies (I guess?)
             public const int AVG_PATCH_SIDE = 512; // Average length of the side of a 'patch' (rectangular section used to generate floor plan)
-            public const int PATCH_SIDE_VARIATION = 256; // Max variation in patch side length
+            public const int PATCH_SIDE_VARIATION = 128; // Max variation in patch side length
+            public const int GRID_SNAP_SIZE = 32; // Default value for brushes to snap to
             public List<Brush> floorBrushwork;
             public AbstractLayout layout;
             public struct GeneratorParams
@@ -1007,12 +1014,13 @@ namespace InfiniteDust
             }
 
             // Makes a patch of random size guaranteed to contain the supplied origin
-            public Brush MakePatch(Coords origin, int avgSideLength, int sideVariation, Random rng)
+            // The margin is the distance between the origin and the sides of the brush (must be nonzero to avoid trace issues)
+            public Brush MakePatch(Coords origin, int avgSideLength, int sideVariation, int snap, int margin, Random rng)
             {
-                int xLen = avgSideLength + rng.Next(-sideVariation, sideVariation);
-                int yLen = avgSideLength + rng.Next(-sideVariation, sideVariation);
-                int xOffset = rng.Next(xLen);
-                int yOffset = rng.Next(yLen);
+                int xLen = ((avgSideLength + rng.Next(-sideVariation, sideVariation)) / snap) * snap;
+                int yLen = ((avgSideLength + rng.Next(-sideVariation, sideVariation)) / snap) * snap;
+                int xOffset = (rng.Next(xLen - margin) / snap) * snap;
+                int yOffset = (rng.Next(yLen - margin) / snap) * snap;
 
                 Coords p1 = new Coords(origin.x - xOffset, origin.y + yOffset, origin.z);
                 Coords p2 = new Coords(p1.x + xLen, p1.y - yLen, p1.z - 32);
@@ -1022,11 +1030,11 @@ namespace InfiniteDust
 
             // Grow a patch outward from an existing brush in such a way that it doesn't intersect with existing floor patches.
             // Returns the brush itself and also a point indicating the middle of the brush
-            public (Brush, Coords) BudPatch(Brush parent, Vector bearing, int avgSideLength, int sideVariation, Random rng)
+            public (Brush, Coords) BudPatch(Brush parent, Vector bearing, int avgSideLength, int sideVariation, int snap, Random rng)
             {
                 Brush bud = null;
-                int targetHeight = avgSideLength + rng.Next(-sideVariation, sideVariation);
-                int targetWidth = avgSideLength + rng.Next(-sideVariation, sideVariation);
+                int targetHeight = (int)Math.Round((double)(avgSideLength + rng.Next(-sideVariation, sideVariation)) / (double)(snap)) * snap;
+                int targetWidth = (int)Math.Round((double)(avgSideLength + rng.Next(-sideVariation, sideVariation)) / (double)(snap)) * snap;
                 int floorHeight = -9999;
                 // There's got to be a quicker way to pull the right plane out of the set, right???
                 foreach(Plane plane in parent.planes)
@@ -1097,8 +1105,10 @@ namespace InfiniteDust
                     }
                 }
                 Vector line = new Vector(startCorner, endCorner);
-                double scale = rng.NextDouble();
-                Coords seedPoint = new Coords(startCorner.x + (int)Math.Round(line.x * scale), startCorner.y + (int)Math.Round(line.y * scale), startCorner.z - 16);
+                Coords midPoint = startCorner + (line * 0.5);
+                double offsetScale = rng.NextDouble() / 2;
+                if (rng.NextDouble() < 0.5) { offsetScale *= -1; }
+                Coords seedPoint = new Coords((midPoint.x + (int)Math.Round(line.x * offsetScale)) / snap * snap, (midPoint.y + (int)Math.Round(line.y * offsetScale)) / snap * snap, midPoint.z - 16);
 
                 // Grow a line perpendicular to parent plane at the valid point, to determine 'height' of the rect
                 Vector.TraceInfo initialTrace = Vector.Trace(seedPoint, parentPlane.Normal(), this.floorBrushwork, targetHeight);
@@ -1167,7 +1177,7 @@ namespace InfiniteDust
                     {
                         if (layout.locales[i, j].purpose != LocationPurpose.INACCESSIBLE)
                         {
-                            floorBrushwork.Add(MakePatch(layout.locales[i, j].coords, AVG_PATCH_SIDE, PATCH_SIDE_VARIATION, rng)); // Use this one for more positioning variability
+                            floorBrushwork.Add(MakePatch(layout.locales[i, j].coords, AVG_PATCH_SIDE, PATCH_SIDE_VARIATION, GRID_SNAP_SIZE, 16, rng)); // Use this one for more positioning variability
                         }
                     }
                 }
@@ -1205,7 +1215,7 @@ namespace InfiniteDust
                 }
                 else
                 {
-                    currentBrush = MakePatch(source.coords, AVG_PATCH_SIDE, PATCH_SIDE_VARIATION, rng);
+                    currentBrush = MakePatch(source.coords, AVG_PATCH_SIDE, PATCH_SIDE_VARIATION, GRID_SNAP_SIZE, 16, rng);
                     floorBrushwork.Add(currentBrush);
                 }
 
@@ -1229,7 +1239,7 @@ namespace InfiniteDust
                     nextBearing = Vector.RotateAboutAxis(nextBearing, new Vector(0, 0, 1), z * Math.PI / 180);
                     // Bud out and update our 'position' (roughly) to the new brush
                     Brush nextBrush;
-                    (nextBrush, currentPos) = BudPatch(currentBrush, nextBearing, AVG_PATCH_SIDE, PATCH_SIDE_VARIATION, rng);
+                    (nextBrush, currentPos) = BudPatch(currentBrush, nextBearing, AVG_PATCH_SIDE, PATCH_SIDE_VARIATION, GRID_SNAP_SIZE, rng);
                     floorBrushwork.Add(nextBrush);
                     currentBrush = nextBrush;
                     // How do we know if we reached the destination? Either our currentBrush covers it, OR, it shares a side with a brush that already does
