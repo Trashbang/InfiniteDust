@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 
 namespace InfiniteDust
 {
+
     // Some notes on the scale, properties and proportions of DE_DUST2. Probably will be necessary at some point.
 
     // Playable space bounding box: 3840x4128 (okay so, let's say 4096x4096?)
@@ -44,6 +45,49 @@ namespace InfiniteDust
     // Sand may pile up in right-angle corners, producing slightly raised terrain. It may also pile up against a wall in a 4:1 slope.
 
     // Try to remember Hammer uses Z-up, won't you?
+    
+    public class GoldSrc
+    {
+        public const int MAX_COORDS = 4096; // Hammer grid maxes out at +/-4096 units in GoldSrc. I should probably read into whether there's a way around this
+
+        // These are the 'corners' of the world -- essentially the furthest you can go from the origin without going off-grid
+        public static Coords[] worldCorners =
+        {
+            
+            // Did I steal this cube from https://gist.github.com/Newbrict/9787981? You bet I did, champ!
+            /* 
+                1-------2
+               /|      /|
+              / |     / |
+             0--|----3  |
+             |  5----|--6
+             | /     | /
+             4-------7
+            
+            */
+            new Coords(-MAX_COORDS, -MAX_COORDS, MAX_COORDS),
+            new Coords(-MAX_COORDS, MAX_COORDS, MAX_COORDS),
+            new Coords(MAX_COORDS, MAX_COORDS, MAX_COORDS),
+            new Coords(MAX_COORDS, -MAX_COORDS, MAX_COORDS),
+            new Coords(-MAX_COORDS, -MAX_COORDS, -MAX_COORDS),
+            new Coords(-MAX_COORDS, MAX_COORDS, -MAX_COORDS),
+            new Coords(MAX_COORDS, MAX_COORDS, -MAX_COORDS),
+            new Coords(MAX_COORDS, -MAX_COORDS, -MAX_COORDS)
+        };
+
+        // These are the universal planes marking the boundaries of the world space. Useful for making sure traces don't extend out into the void
+        // Note that they don't actually belong to a brush per se, so be careful about using them in contexts that assume as much
+        public static Plane[] worldBoundaries =
+        {
+            new Plane(worldCorners[2], worldCorners[1], worldCorners[0], "null", true), // Z-max
+            new Plane(worldCorners[4], worldCorners[5], worldCorners[6], "null", true), // Z-min
+            new Plane(worldCorners[2], worldCorners[3], worldCorners[7], "null", true), // X-max
+            new Plane(worldCorners[4], worldCorners[0], worldCorners[1], "null", true), // X-min
+            new Plane(worldCorners[5], worldCorners[1], worldCorners[2], "null", true), // Y-max
+            new Plane(worldCorners[3], worldCorners[0], worldCorners[4], "null", true)  // Y-min
+        };
+    }
+
     public struct Coords
     {
         public int x;
@@ -237,6 +281,18 @@ namespace InfiniteDust
                             isInside = false;
                             break;
                         }
+                    }
+                    // Quick check that we haven't violated the delicate boundaries of the physical realm
+                    foreach(Plane plane in GoldSrc.worldBoundaries)
+                    {
+                        Coords planePoint = plane.p1;
+                        Vector traceOffset = new Vector(planePoint, location);
+                        if (Vector.DotProduct(plane.Normal(), traceOffset) <= 0)
+                        {
+                            results.hit = true;
+                            break;
+                        }
+                        
                     }
                     if (isInside)
                     {
@@ -568,7 +624,6 @@ namespace InfiniteDust
     // High-level representation of the map as a series of routes and locations. Doesn't handle brushwork, just organisation
     public class AbstractLayout
     {
-
         public const int MAX_VERTICAL_VARIANCE = 0; // Maximum height difference between 'connected' Locations. Tweak as necessary.
         public const int MIN_VERTICAL_VARIANCE = 0;
         public const int BASE_HORIZONTAL_SEPARATION = 2048; // Standard (average?) distance between any two locations. Derived from Dust2 being approx 4096x4096
@@ -612,7 +667,7 @@ namespace InfiniteDust
 
             // Twelve Paths, one between each pair of adjacent Locations (no diagonals)
             paths.Add(new Path(locales[0, 0], locales[1, 0]));
-            /*paths.Add(new Path(locales[1, 0], locales[2, 0]));
+            paths.Add(new Path(locales[1, 0], locales[2, 0]));
             paths.Add(new Path(locales[0, 1], locales[1, 1]));
             paths.Add(new Path(locales[1, 1], locales[2, 1]));
             paths.Add(new Path(locales[0, 2], locales[1, 2]));
@@ -623,7 +678,7 @@ namespace InfiniteDust
             paths.Add(new Path(locales[1, 0], locales[1, 1]));
             paths.Add(new Path(locales[1, 1], locales[1, 2]));
             paths.Add(new Path(locales[2, 0], locales[2, 1]));
-            paths.Add(new Path(locales[2, 1], locales[2, 2]));*/
+            paths.Add(new Path(locales[2, 1], locales[2, 2]));
         }
 
         // 'allowVariation' lets the constructor deviate somewhat from the standard four-square AbstractLayout
@@ -991,7 +1046,7 @@ namespace InfiniteDust
 
         public class BrushworkGenerator
         {
-            public const double PATH_WIGGLYNESS = 0.0; // Degree to which paths created by the floor generator deviate from as-the-crow-flies (I guess?)
+            public const double PATH_WIGGLYNESS = 0.25; // Degree to which paths created by the floor generator deviate from as-the-crow-flies (I guess?)
             public const int AVG_PATCH_SIDE = 512; // Average length of the side of a 'patch' (rectangular section used to generate floor plan)
             public const int PATCH_SIDE_VARIATION = 128; // Max variation in patch side length
             public const int GRID_SNAP_SIZE = 32; // Default value for brushes to snap to
@@ -1080,6 +1135,8 @@ namespace InfiniteDust
                     }
                     // If no adjacency was found on the selected surface, we can start to grow our new brush.
                     // Otherwise, the process repeats with a new 'parent'
+                    // This loop is guaranteed to terminate because the bearing doesn't change,
+                    // so we're 'travelling' in a constant direction that will eventually reach an uncovered edge
                     if (!foundAdjacency)
                     {
                         readyToBud = true;
@@ -1114,18 +1171,29 @@ namespace InfiniteDust
                 Vector.TraceInfo initialTrace = Vector.Trace(seedPoint, parentPlane.Normal(), this.floorBrushwork, targetHeight);
 
                 // Choose a direction and grow a rectangle with the line's height
+                // (we may have to flip it, if it spits out a maxWidth of zero)
                 int sign = (rng.Next(0, 2) * 2) - 1;
+                int maxWidth;
                 Vector direction = Vector.RotateAboutAxis(parentPlane.Normal(), Vector.Up(), Math.PI / 2) * sign;
-                int maxWidth = targetWidth;
-                for (int i = 0; i < initialTrace.traceLen; i++)
+                do
                 {
-                    Coords widthTraceStart = new Coords((int)Math.Round(seedPoint.x + parentPlane.Normal().x * i), (int)Math.Round(seedPoint.y + parentPlane.Normal().y * i), (int)Math.Round(seedPoint.z + parentPlane.Normal().z * i));
-                    Vector.TraceInfo widthTrace = Vector.Trace(widthTraceStart, direction, this.floorBrushwork, maxWidth);
-                    if (widthTrace.traceLen < maxWidth)
+                    
+                    maxWidth = targetWidth;
+                    for (int i = 0; i < initialTrace.traceLen; i++)
                     {
-                        maxWidth = (int)Math.Round(widthTrace.traceLen);
+                        Coords widthTraceStart = new Coords((int)Math.Round(seedPoint.x + parentPlane.Normal().x * i), (int)Math.Round(seedPoint.y + parentPlane.Normal().y * i), (int)Math.Round(seedPoint.z + parentPlane.Normal().z * i));
+                        Vector.TraceInfo widthTrace = Vector.Trace(widthTraceStart, direction, this.floorBrushwork, maxWidth);
+                        if (widthTrace.traceLen < maxWidth)
+                        {
+                            maxWidth = (int)Math.Round(widthTrace.traceLen);
+                        }
                     }
-                }
+                    if (maxWidth == 0)
+                    {
+                        sign *= -1;
+                    }
+                } while (maxWidth == 0);
+                
                 // Right, we have enough info to actually construct the brush
                 // Now we just need to sort it out
                 // (There's probably a more efficient way to do this, but w/e, it's four points, gimme a break)
@@ -1134,10 +1202,10 @@ namespace InfiniteDust
                 corners[1] = initialTrace.finishPoint;
                 corners[2] = seedPoint + direction * maxWidth;
                 corners[3] = initialTrace.finishPoint + direction * maxWidth;
-                int maxX = -9999;
-                int maxY = -9999;
-                int minX = 9999;
-                int minY = 9999;
+                int maxX = -GoldSrc.MAX_COORDS;
+                int maxY = -GoldSrc.MAX_COORDS;
+                int minX = GoldSrc.MAX_COORDS;
+                int minY = GoldSrc.MAX_COORDS;
                 foreach (Coords corner in corners)
                 {
                     if (corner.x < minX)
@@ -1195,7 +1263,7 @@ namespace InfiniteDust
                     }
                     MakePath(source, dest, PATH_WIGGLYNESS, AVG_PATCH_SIDE, PATCH_SIDE_VARIATION, rng, false);
                     Console.WriteLine("Generated path between " + path.GetLocations()[0].coords.ToMapString() + " and " + path.GetLocations()[1].coords.ToMapString());
-
+                    
                 }
 
                 
@@ -1239,9 +1307,11 @@ namespace InfiniteDust
                     nextBearing = Vector.RotateAboutAxis(nextBearing, new Vector(0, 0, 1), z * Math.PI / 180);
                     // Bud out and update our 'position' (roughly) to the new brush
                     Brush nextBrush;
-                    (nextBrush, currentPos) = BudPatch(currentBrush, nextBearing, AVG_PATCH_SIDE, PATCH_SIDE_VARIATION, GRID_SNAP_SIZE, rng);
+                    Coords nextPos;
+                    (nextBrush, nextPos) = BudPatch(currentBrush, nextBearing, AVG_PATCH_SIDE, PATCH_SIDE_VARIATION, GRID_SNAP_SIZE, rng);
                     floorBrushwork.Add(nextBrush);
                     currentBrush = nextBrush;
+                    currentPos = nextPos;
                     // How do we know if we reached the destination? Either our currentBrush covers it, OR, it shares a side with a brush that already does
                     Vector.TraceInfo destTrace = Vector.Trace(new Coords(dest.coords.x, dest.coords.y, dest.coords.z - 16), new Vector(0, 0, 1), floorBrushwork, Vector.MAX_TRACE_LENGTH);
                     if (destTrace.hit)
