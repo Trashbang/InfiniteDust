@@ -1163,7 +1163,7 @@ namespace InfiniteDust
                 }
                 Vector line = new Vector(startCorner, endCorner);
                 Coords midPoint = startCorner + (line * 0.5);
-                double offsetScale = rng.NextDouble() / 2;
+                double offsetScale = rng.NextDouble() / 3; // We could divide this by 2 to cover the length of the side, but we'd end up with corner cases -- literally
                 if (rng.NextDouble() < 0.5) { offsetScale *= -1; }
                 Coords seedPoint = new Coords((midPoint.x + (int)Math.Round(line.x * offsetScale)) / snap * snap, (midPoint.y + (int)Math.Round(line.y * offsetScale)) / snap * snap, midPoint.z - 16);
 
@@ -1171,15 +1171,16 @@ namespace InfiniteDust
                 Vector.TraceInfo initialTrace = Vector.Trace(seedPoint, parentPlane.Normal(), this.floorBrushwork, targetHeight);
 
                 // Choose a direction and grow a rectangle with the line's height
-                // (we may have to flip it, if it spits out a maxWidth of zero)
+                // (we may have to flip it or reduce its height, if it spits out a maxWidth of zero)
                 int sign = (rng.Next(0, 2) * 2) - 1;
                 int maxWidth;
                 Vector direction = Vector.RotateAboutAxis(parentPlane.Normal(), Vector.Up(), Math.PI / 2) * sign;
+                bool rectIsValid = false;
+                bool triedBothSides = false;
                 do
                 {
-                    
                     maxWidth = targetWidth;
-                    for (int i = 0; i < initialTrace.traceLen; i++)
+                    for (int i = 0; i < initialTrace.traceLen; i += (snap / 2))
                     {
                         Coords widthTraceStart = new Coords((int)Math.Round(seedPoint.x + parentPlane.Normal().x * i), (int)Math.Round(seedPoint.y + parentPlane.Normal().y * i), (int)Math.Round(seedPoint.z + parentPlane.Normal().z * i));
                         Vector.TraceInfo widthTrace = Vector.Trace(widthTraceStart, direction, this.floorBrushwork, maxWidth);
@@ -1188,12 +1189,30 @@ namespace InfiniteDust
                             maxWidth = (int)Math.Round(widthTrace.traceLen);
                         }
                     }
+                    // It's possible that our trace will run parallel to a brush edge (or, worse, between two brushes)
+                    // These are corrective measures to account for those eventualities
                     if (maxWidth == 0)
                     {
-                        sign *= -1;
+                        if (!triedBothSides)
+                        {
+                            sign *= -1;
+                            triedBothSides = true;
+                        }
+                        else
+                        {
+                            // Cut our height down and try again
+                            triedBothSides = false;
+                            targetHeight -= snap;
+                            initialTrace = Vector.Trace(seedPoint, parentPlane.Normal(), this.floorBrushwork, targetHeight);
+                        }
                     }
-                } while (maxWidth == 0);
+                    else
+                    {
+                        rectIsValid = true;
+                    }
+                } while (!rectIsValid);
                 
+
                 // Right, we have enough info to actually construct the brush
                 // Now we just need to sort it out
                 // (There's probably a more efficient way to do this, but w/e, it's four points, gimme a break)
@@ -1277,7 +1296,7 @@ namespace InfiniteDust
                 bool destReached = false;
                 // Is a brush already at the start? If not, make one and make it the currentBrush
                 Vector.TraceInfo sourceTrace = Vector.Trace(new Coords(source.coords.x, source.coords.y, source.coords.z - 16), new Vector(0, 0, 1), floorBrushwork, Vector.MAX_TRACE_LENGTH);
-                if (sourceTrace.hit)
+                if (sourceTrace.hit && sourceTrace.impactBrush != null)
                 {
                     currentBrush = sourceTrace.impactBrush;
                 }
@@ -1314,7 +1333,7 @@ namespace InfiniteDust
                     currentPos = nextPos;
                     // How do we know if we reached the destination? Either our currentBrush covers it, OR, it shares a side with a brush that already does
                     Vector.TraceInfo destTrace = Vector.Trace(new Coords(dest.coords.x, dest.coords.y, dest.coords.z - 16), new Vector(0, 0, 1), floorBrushwork, Vector.MAX_TRACE_LENGTH);
-                    if (destTrace.hit)
+                    if (destTrace.hit && destTrace.impactBrush != null)
                     {
                         if (destTrace.impactBrush == currentBrush)
                         {
@@ -1323,7 +1342,7 @@ namespace InfiniteDust
                         else
                         {
                             (Plane p1, Plane p2) = Brush.TestRectAdjacency(currentBrush, destTrace.impactBrush);
-                            if (destTrace.hit && p1 != null && p2 != null)
+                            if (p1 != null && p2 != null)
                             {
                                 destReached = true;
                             }
